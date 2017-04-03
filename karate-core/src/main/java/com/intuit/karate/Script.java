@@ -56,12 +56,10 @@ import javax.script.ScriptEngineManager;
 import jdk.nashorn.api.scripting.ScriptObjectMirror;
 import net.minidev.json.JSONObject;
 import net.minidev.json.JSONValue;
-import org.apache.commons.io.IOUtils;
 import org.apache.commons.lang3.ClassUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.tuple.Pair;
 import org.bson.BsonDocument;
-import org.bson.BsonSerializationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.w3c.dom.Attr;
@@ -498,17 +496,6 @@ public class Script {
             ScriptValue actual = context.vars.get(name);
             switch (actual.getType()) {
                 case STRING:
-                    BsonDocument bson = null;
-                    byte[] bytes = ((String) actual.getValue()).getBytes();
-                    bson = BsonUtils.fromByteArray(bytes);
-                    if(bson != null) {
-                        JSONObject json = BsonUtils.bsonToJson(bson);
-                        DocumentContext doc = JsonUtils.toJsonDoc(json.toJSONString());
-                        actual = new ScriptValue(doc);
-                        return matchJsonPath(matchType, actual, path, expected, context);
-                    }else {
-                        return matchString(matchType, actual, expected, path, context);
-                    }
                 case INPUT_STREAM:
                     return matchString(matchType, actual, expected, path, context);
 

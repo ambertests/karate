@@ -95,6 +95,8 @@ public class StepDefs {
     private MultiPart multiPart;
     private MultivaluedMap<String, Object> formFields;
 
+    private boolean useBson;
+
     private final ScriptContext context;
 
     public ScriptContext getContext() {
@@ -224,7 +226,7 @@ public class StepDefs {
     @When("^yaml (.+) =$")
     public void yamlDocString(String name, String expression) {
         Script.assignYaml(name, expression, context);
-    }    
+    }
 
     @When("^assert (.+)")
     public void asssertBoolean(String expression) {
@@ -329,6 +331,7 @@ public class StepDefs {
                             mediaType = MediaType.APPLICATION_OCTET_STREAM;
                         }
                         entity = Entity.entity(byteStream, mediaType);
+                        useBson = true;
                         break;
                     default:
                         if (mediaType == null) {
@@ -355,24 +358,34 @@ public class StepDefs {
         DocumentContext headers = JsonPath.parse(response.getHeaders());
         logger.trace("set response headers: {}", headers.jsonString());
         context.vars.put(ScriptValueMap.VAR_RESPONSE_HEADERS, headers);
-        String rawResponse = response.readEntity(String.class);
-        if (Script.isJson(rawResponse)) {
-            context.vars.put(ScriptValueMap.VAR_RESPONSE, JsonUtils.toJsonDoc(rawResponse));
-        } else if (Script.isXml(rawResponse)) {
-            try {
-                context.vars.put(ScriptValueMap.VAR_RESPONSE, XmlUtils.toXmlDoc(rawResponse));
-            } catch (Exception e) {
-                logger.warn("xml parsing failed, response data type set to string: {}", e.getMessage());
+        BsonDocument bson = null;
+        if(useBson && headers.jsonString().contains(MediaType.APPLICATION_OCTET_STREAM)){
+            byte[] bytes = response.readEntity(byte[].class);
+            bson = BsonUtils.fromByteArray(bytes);
+        }
+        if(bson != null){
+            context.vars.put(ScriptValueMap.VAR_RESPONSE, BsonUtils.bsonToJson(bson));
+        }else {
+            String rawResponse = response.readEntity(String.class);
+            if (Script.isJson(rawResponse)) {
+                context.vars.put(ScriptValueMap.VAR_RESPONSE, JsonUtils.toJsonDoc(rawResponse));
+            } else if (Script.isXml(rawResponse)) {
+                try {
+                    context.vars.put(ScriptValueMap.VAR_RESPONSE, XmlUtils.toXmlDoc(rawResponse));
+                } catch (Exception e) {
+                    logger.warn("xml parsing failed, response data type set to string: {}", e.getMessage());
+                    context.vars.put(ScriptValueMap.VAR_RESPONSE, rawResponse);
+                }
+            } else {
                 context.vars.put(ScriptValueMap.VAR_RESPONSE, rawResponse);
             }
-        } else {
-            context.vars.put(ScriptValueMap.VAR_RESPONSE, rawResponse);
         }
         // reset url and some state
         target = context.client.target(url);
         formFields = null;
         multiPart = null;
         request = null;
+        useBson = false;
     }
 
     @When("^soap action( .+)?")
