@@ -40,6 +40,7 @@ import com.intuit.karate.validator.ValidationResult;
 import com.intuit.karate.validator.Validator;
 import com.jayway.jsonpath.DocumentContext;
 import com.jayway.jsonpath.JsonPath;
+
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -51,9 +52,14 @@ import javax.script.Bindings;
 import javax.script.ScriptEngine;
 import javax.script.ScriptEngineManager;
 import jdk.nashorn.api.scripting.ScriptObjectMirror;
+import net.minidev.json.JSONObject;
+import net.minidev.json.JSONValue;
+import org.apache.commons.io.IOUtils;
 import org.apache.commons.lang3.ClassUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.tuple.Pair;
+import org.bson.BsonDocument;
+import org.bson.BsonSerializationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.w3c.dom.Attr;
@@ -87,6 +93,9 @@ public class Script {
 
     public static final boolean isJson(String text) {
         return text.startsWith("{") || text.startsWith("[");
+    }
+    public static final boolean isBson(String text) {
+        return text.startsWith("B{");
     }
 
     public static final boolean isXml(String text) {
@@ -188,6 +197,13 @@ public class Script {
             DocumentContext doc = JsonUtils.toJsonDoc(text);
             evalJsonEmbeddedExpressions(doc, context);
             return new ScriptValue(doc);
+        } else if(isBson(text)) {
+            text = text.substring(1);
+            DocumentContext doc = JsonUtils.toJsonDoc(text);
+            evalJsonEmbeddedExpressions(doc, context);
+            JSONObject json = JSONValue.parse(doc.jsonString(), JSONObject.class);
+            BsonDocument bson = BsonUtils.jsonToBson(json);
+            return new ScriptValue(bson);
         } else if (isXml(text)) {
             Document doc = XmlUtils.toXmlDoc(text);
             evalXmlEmbeddedExpressions(doc, context);
@@ -436,7 +452,16 @@ public class Script {
             switch (actual.getType()) {
                 case STRING:
                 case INPUT_STREAM:
-                    return matchString(matchType, actual, expected, path, context);
+                    byte[] bytes = ((String)actual.getValue()).getBytes();
+                    BsonDocument bson = BsonUtils.fromByteArray(bytes);
+                    if(bson != null) {
+                        JSONObject json = BsonUtils.bsonToJson(bson);
+                        DocumentContext doc = JsonUtils.toJsonDoc(json.toJSONString());
+                        actual = new ScriptValue(doc);
+                        return matchJsonPath(matchType, actual, path, expected, context);
+                    }else {
+                        return matchString(matchType, actual, expected, path, context);
+                    }
                 case XML:
                     if ("$".equals(path)) {
                         path = "/"; // edge case where the name was 'response'

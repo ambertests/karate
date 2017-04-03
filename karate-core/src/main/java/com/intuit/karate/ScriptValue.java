@@ -8,6 +8,7 @@ import java.util.Map;
 import jdk.nashorn.api.scripting.ScriptObjectMirror;
 import org.apache.commons.io.IOUtils;
 import org.apache.commons.lang3.ClassUtils;
+import org.bson.BsonDocument;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.w3c.dom.Node;
@@ -35,7 +36,8 @@ public class ScriptValue {
         JS_OBJECT,
         JS_FUNCTION,
         INPUT_STREAM,
-        FEATURE_WRAPPER
+        FEATURE_WRAPPER,
+        BSON_DOCUMENT
     }
 
     private final Object value;
@@ -60,6 +62,7 @@ public class ScriptValue {
             case JS_FUNCTION: return "js()";
             case INPUT_STREAM: return "stream";
             case FEATURE_WRAPPER: return "feat";
+            case BSON_DOCUMENT: return "bson";
             default: return "??";
         }
     }
@@ -93,6 +96,8 @@ public class ScriptValue {
                 } catch (Exception e) {
                     throw new RuntimeException(e);
                 }
+            case BSON_DOCUMENT:
+                return ((BsonDocument)value).toJson();
             default:
                 return value.toString();
         }
@@ -114,6 +119,9 @@ public class ScriptValue {
                 } catch (Exception e) {
                     throw new RuntimeException(e);
                 }
+            case BSON_DOCUMENT:
+                return ((BsonDocument)value).toJson();
+
             default:
                 return value.toString();
         }        
@@ -154,7 +162,9 @@ public class ScriptValue {
             type = Type.XML;
         } else if (value instanceof List) {
             type = Type.LIST;
-        } else if (value instanceof Map) {
+        } else if (value.getClass().getName().equals(BsonDocument.class.getName())){
+            type = Type.BSON_DOCUMENT;
+        }else if (value instanceof Map) {
             if (value instanceof ScriptObjectMirror) {
                 ScriptObjectMirror som = (ScriptObjectMirror) value;
                 if (som.isArray()) {
@@ -171,7 +181,8 @@ public class ScriptValue {
             type = Type.STRING;
         } else if (value instanceof InputStream) {
             type = Type.INPUT_STREAM;
-        } else if (ClassUtils.isPrimitiveOrWrapper(value.getClass())) {
+        }
+        else if (ClassUtils.isPrimitiveOrWrapper(value.getClass())) {
             type = Type.PRIMITIVE;
         } else if (value instanceof FeatureWrapper) {
             type = Type.FEATURE_WRAPPER;

@@ -31,6 +31,7 @@ import cucumber.api.java.en.Given;
 import cucumber.api.java.en.Then;
 import cucumber.api.java.en.When;
 
+import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.InputStream;
 import java.util.HashMap;
@@ -46,6 +47,7 @@ import javax.ws.rs.core.MultivaluedMap;
 import javax.ws.rs.core.NewCookie;
 import javax.ws.rs.core.Response;
 import org.apache.commons.lang3.StringUtils;
+import org.bson.BsonDocument;
 import org.glassfish.jersey.media.multipart.BodyPart;
 import org.glassfish.jersey.media.multipart.FormDataBodyPart;
 import org.glassfish.jersey.media.multipart.MultiPart;
@@ -308,6 +310,14 @@ public class StepDefs {
                             mediaType = MediaType.APPLICATION_OCTET_STREAM;
                         }
                         entity = Entity.entity(is, mediaType);
+                        break;
+                    case BSON_DOCUMENT:
+                        BsonDocument bson = request.getValue(BsonDocument.class);
+                        ByteArrayInputStream byteStream = new ByteArrayInputStream(BsonUtils.toByteArray(bson));
+                        if (mediaType == null) {
+                            mediaType = MediaType.APPLICATION_OCTET_STREAM;
+                        }
+                        entity = Entity.entity(byteStream, mediaType);
                         break;
                     default:
                         if (mediaType == null) {
