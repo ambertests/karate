@@ -498,9 +498,9 @@ public class Script {
             ScriptValue actual = context.vars.get(name);
             switch (actual.getType()) {
                 case STRING:
-                case INPUT_STREAM:
-                    byte[] bytes = ((String)actual.getValue()).getBytes();
-                    BsonDocument bson = BsonUtils.fromByteArray(bytes);
+                    BsonDocument bson = null;
+                    byte[] bytes = ((String) actual.getValue()).getBytes();
+                    bson = BsonUtils.fromByteArray(bytes);
                     if(bson != null) {
                         JSONObject json = BsonUtils.bsonToJson(bson);
                         DocumentContext doc = JsonUtils.toJsonDoc(json.toJSONString());
@@ -509,6 +509,9 @@ public class Script {
                     }else {
                         return matchString(matchType, actual, expected, path, context);
                     }
+                case INPUT_STREAM:
+                    return matchString(matchType, actual, expected, path, context);
+
                 case XML:
                     if ("$".equals(path)) {
                         path = "/"; // whole document, also edge case where variable name was 'response'

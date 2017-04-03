@@ -14,11 +14,13 @@ import java.nio.ByteBuffer;
 import java.util.Date;
 
 /**
- * Created by amber.race on 3/29/17.
+ *
+ * @author ambertests
  */
 public class BsonUtils {
     private static Codec<BsonDocument> DOC_CODEC = new BsonDocumentCodec();
 
+    private BsonUtils(){}
 
     public static byte[] toByteArray(BsonDocument bsonDocument){
         BasicOutputBuffer outputBuffer = new BasicOutputBuffer();
@@ -29,11 +31,13 @@ public class BsonUtils {
 
     public static BsonDocument fromByteArray(byte[] bytes){
         BsonDocument bsonDoc = null;
-        try {
+        if (bytes != null && bytes.length > 0){
             BsonBinaryReader bsonReader = new BsonBinaryReader(ByteBuffer.wrap(bytes));
-            bsonDoc = DOC_CODEC.decode(bsonReader, DecoderContext.builder().build());
-        }catch(BsonSerializationException e){
-            //pass
+            try {
+                bsonDoc = DOC_CODEC.decode(bsonReader, DecoderContext.builder().build());
+            } catch (BsonSerializationException e) {
+                //e.printStackTrace();
+            }
         }
         return bsonDoc;
     }
@@ -45,8 +49,6 @@ public class BsonUtils {
 				json.put(key, bsonListToJsonArray(val.asArray()));
 			}else if (val.isDocument()) {
 				json.put(key, bsonToJson(val.asDocument()));
-			}else if (val.isBinary()){
-				json.put(key, new String(val.asBinary().getData()));
 			}else {
 				json.put(key, getObjectFromBsonValue(val));
 			}
@@ -56,7 +58,7 @@ public class BsonUtils {
 	}
 
 	private static Object getObjectFromBsonValue(BsonValue val){
-		Object obj = null;
+		Object obj;
 		if (val.isString()){
 			obj = val.asString().getValue();
 		}else if (val.isInt32()) {
@@ -69,7 +71,9 @@ public class BsonUtils {
 			obj = val.asDouble().getValue();
 		}else if (val.isInt64()){
 			obj = val.asInt64().longValue();
-		} else if (val.isNull()){
+		}else if (val.isBinary()){
+            obj = val.asBinary().getData();
+        }else if (val.isNull()){
 			obj = null;
 		}else if (val.isTimestamp()){
 			obj = val.asTimestamp().getTime();
