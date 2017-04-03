@@ -4,7 +4,7 @@
 
     <groupId>com.intuit.karate</groupId>
     <artifactId>karate-parent</artifactId>
-    <version>0.2.8.BSON</version>
+    <version>0.2.9.BSON</version>
     <packaging>pom</packaging>
     
     <name>${project.artifactId}</name>
@@ -46,7 +46,6 @@
         <module>karate-demo</module>
         <module>karate-testng</module>
         <module>karate-archetype</module>
-        <module>datahearst-karate</module>
     </modules>
 
     <dependencies>

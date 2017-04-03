@@ -1,3 +1,26 @@
+/*
+ * The MIT License
+ *
+ * Copyright 2017 Intuit Inc.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
+ */
 package com.intuit.karate;
 
 import com.jayway.jsonpath.DocumentContext;
@@ -7,6 +30,7 @@ import java.util.List;
 import org.apache.commons.lang3.tuple.Pair;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.yaml.snakeyaml.Yaml;
 
 /**
  *
@@ -36,20 +60,10 @@ public class JsonUtils {
         return Pair.of(left, right);
     }
 
-    private static Object handleIfJson(Object value) {
-        if (value instanceof DocumentContext) {
-            DocumentContext doc = (DocumentContext) value;
-            return doc.read("$");
-        } else {
-            return value;
-        }
-    }
-
     public static void setValueByPath(DocumentContext doc, String path, Object value) {
         if ("$".equals(path)) {
             throw new RuntimeException("cannot replace root path $");
         }
-        value = handleIfJson(value); // convert to map if necessary (TODO may not be needed)
         Pair<String, String> pathLeaf = getParentAndLeafPath(path);
         String left = pathLeaf.getLeft();
         String right = pathLeaf.getRight();
@@ -76,6 +90,11 @@ public class JsonUtils {
             doc.put(left, right, value);
         }
         logger.trace("after set: {}", doc.jsonString());
+    }
+    
+    public static DocumentContext fromYaml(String raw) {
+        Yaml yaml = new Yaml();
+        return JsonPath.parse(yaml.load(raw));
     }
 
 }

@@ -40,7 +40,9 @@ import com.intuit.karate.validator.ValidationResult;
 import com.intuit.karate.validator.Validator;
 import com.jayway.jsonpath.DocumentContext;
 import com.jayway.jsonpath.JsonPath;
-
+import java.math.BigDecimal;
+import java.text.DecimalFormat;
+import java.text.ParseException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -105,6 +107,10 @@ public class Script {
     public static final boolean isXmlPath(String text) {
         return text.startsWith("/");
     }
+    
+    public static final boolean isXmlPathFunction(String text) {
+        return text.matches("^[a-z-]+\\(.+");
+    }
 
     public static final boolean isEmbeddedExpression(String text) {
         return text.startsWith("#(") && text.endsWith(")");
@@ -117,6 +123,10 @@ public class Script {
     public static final boolean isVariable(String text) {
         return VARIABLE_PATTERN.matcher(text).matches();
     }
+    
+    public static final boolean isVariableAndSpaceAndPath(String text) {
+        return text.matches("^" + VARIABLE_PATTERN_STRING + "\\s+.+");
+    }    
 
     public static final boolean isVariableAndJsonPath(String text) {
         return !text.endsWith(")") // hack, just to ignore JS method calls
@@ -150,7 +160,9 @@ public class Script {
         } else {
             path = text.substring(matcher.end());
         }
-        if (!path.startsWith("/")) {
+        if (Script.isXmlPath(path) || Script.isXmlPathFunction(path)) {
+            // xml, don't prefix for json
+        } else {
             path = "$" + path;
         }
         return Pair.of(name, path);
@@ -173,20 +185,23 @@ public class Script {
                 arg = null;
             }
             return call(text, arg, context);
-        } else if (isGetSyntax(text)) { // special case in form "get json[*].path"
+        } else if (isGetSyntax(text)) { // special case in form
+            // get json[*].path
+            // get /xml/path
+            // get xpath-function(expression)
             text = text.substring(4);
-            int pos = text.indexOf(' '); // TODO handle read('file with spaces in the name')
             String left;
-            String right;
-            if (pos != -1) {
-                left = text.substring(0, pos);
-                right = text.substring(pos);
+            String right;            
+            if (isVariableAndSpaceAndPath(text)) {
+                int pos = text.indexOf(' ');
+                right = text.substring(pos + 1);
+                left = text.substring(0, pos);                
             } else {
                 Pair<String, String> pair = parseVariableAndPath(text);
                 left = pair.getLeft();
-                right = pair.getRight();
-            }
-            if (isXmlPath(right)) {
+                right = pair.getRight();                
+            }           
+            if (isXmlPath(right) || isXmlPathFunction(right)) {
                 return evalXmlPathOnVarByName(left, right, context);
             } else {
                 return evalJsonPathOnVarByName(left, right, context);
@@ -264,6 +279,10 @@ public class Script {
                 List list = value.getValue(List.class);
                 DocumentContext fromList = JsonPath.parse(list);
                 return new ScriptValue(fromList.read(exp));
+            case XML: // time to auto-convert again
+                Document xml = value.getValue(Document.class);
+                DocumentContext xmlAsJson = XmlUtils.toJsonDoc(xml);
+                return new ScriptValue(xmlAsJson.read(exp));
             default:
                 throw new RuntimeException("cannot run jsonpath on type: " + value);
         }
@@ -288,7 +307,7 @@ public class Script {
             bindings.put(VAR_SELF, selfValue.getValue());
         }
         if (parentValue != null) {
-            bindings.put(VAR_DOLLAR, parentValue.getAfterConvertingToMapIfNeeded());
+            bindings.put(VAR_DOLLAR, parentValue.getAfterConvertingFromJsonOrXmlIfNeeded());
         }
         try {
             Object o = nashorn.eval(exp);
@@ -319,7 +338,7 @@ public class Script {
                 logger.warn("vars has null vaue for key: {}", key);
                 continue;
             }
-            map.put(key, sv.getAfterConvertingToMapIfNeeded());
+            map.put(key, sv.getAfterConvertingFromJsonOrXmlIfNeeded());
         }
         return map;
     }
@@ -412,14 +431,42 @@ public class Script {
     }
 
     public static void assign(String name, String exp, ScriptContext context) {
+        assign(AssignType.AUTO, name, exp, context);
+    }
+
+    public static void assignText(String name, String exp, ScriptContext context) {
+        assign(AssignType.TEXT, name, exp, context);
+    }
+
+    public static void assignYaml(String name, String exp, ScriptContext context) {
+        assign(AssignType.YAML, name, exp, context);
+    }
+
+    private static void assign(AssignType type, String name, String exp, ScriptContext context) {
         name = StringUtils.trim(name);
         if (!isValidVariableName(name)) {
             throw new RuntimeException("invalid variable name: " + name);
         }
-        if ("request".equals(name)) {
-            throw new RuntimeException("'request' is not a variable, use the form '* request " + exp + "' instead");
+        if ("request".equals(name) || "url".equals(name)) {
+            throw new RuntimeException("'" + name + "' is not a variable, use the form '* " + name + " " + exp + "' instead");
         }
-        ScriptValue sv = eval(exp, context);
+        ScriptValue sv;
+        switch (type) {
+            case TEXT:
+                exp = exp.replace("\n", "\\n");
+                if (!isQuoted(exp)) {
+                    exp = "'" + exp + "'";
+                }
+                sv = evalInNashorn(exp, context);
+                break;
+            case YAML:
+                DocumentContext doc = JsonUtils.fromYaml(exp);
+                evalJsonEmbeddedExpressions(doc, context);
+                sv = new ScriptValue(doc);
+                break;
+            default: // AUTO
+                sv = eval(exp, context);
+        }
         logger.trace("assigning {} = {} evaluated to {}", name, exp, sv);
         context.vars.put(name, sv);
     }
@@ -464,7 +511,7 @@ public class Script {
                     }
                 case XML:
                     if ("$".equals(path)) {
-                        path = "/"; // edge case where the name was 'response'
+                        path = "/"; // whole document, also edge case where variable name was 'response'
                     }
                     if (!isJsonPath(path)) {
                         return matchXmlPath(matchType, actual, path, expected, context);
@@ -564,12 +611,15 @@ public class Script {
         switch (expected.getType()) {
             case XML: // convert to map and then compare               
                 Node expNode = expected.getValue(Node.class);
-                expObject = XmlUtils.toMap(expNode);
-                actObject = XmlUtils.toMap(actNode);
+                expObject = XmlUtils.toObject(expNode);
+                actObject = XmlUtils.toObject(actNode);
                 break;
             default: // try string comparison
                 actObject = new ScriptValue(actNode).getAsString();
                 expObject = expected.getAsString();
+        }
+        if ("/".equals(path)) {
+            path = ""; // else error x-paths reported would start with "//"
         }
         return matchNestedObject('/', path, matchType, actualDoc, actObject, expObject, context);
     }
@@ -599,7 +649,7 @@ public class Script {
             case MAP: // this happens because some jsonpath operations result in Map
                 Map<String, Object> map = actual.getValue(Map.class);
                 actualDoc = JsonPath.parse(map);
-                break;                
+                break;
             case LIST: // this also happens because some jsonpath operations result in List
                 List list = actual.getValue(List.class);
                 actualDoc = JsonPath.parse(list);
@@ -663,8 +713,38 @@ public class Script {
                 return AssertionResult.PASS;
         }
     }
+    
+    private static String getLeafNameFromXmlPath(String path) {
+        int pos = path.lastIndexOf('/');
+        if (pos == -1) {
+            return path;
+        } else {
+            path = path.substring(pos + 1);
+            pos = path.indexOf('[');
+            if (pos != -1) {
+                return path.substring(0, pos);
+            } else {
+                return path;
+            }
+        }
+    }
+    
+    private static Object toXmlString(String elementName, Object o) {
+        if (o instanceof Map) {
+            Node node = XmlUtils.fromObject(elementName, o);
+            return XmlUtils.toString(node);
+        } else {
+            return o;
+        }       
+    }
 
     public static AssertionResult matchFailed(String path, Object actObject, Object expObject, String reason) {
+        if (path.startsWith("/")) {
+            String leafName = getLeafNameFromXmlPath(path);
+            actObject = toXmlString(leafName, actObject);
+            expObject = toXmlString(leafName, expObject);
+            path = path.replace("/@/", "/@");
+        }
         String message = String.format("path: %s, actual: %s, expected: %s, reason: %s", path, actObject, expObject, reason);
         logger.trace("assertion failed - {}", message);
         return AssertionResult.fail(message);
@@ -713,7 +793,7 @@ public class Script {
                     boolean found = false;
                     for (int i = 0; i < actCount; i++) {
                         Object actListObject = actList.get(i);
-                        String listPath = path + "[" + i + "]";
+                        String listPath = buildListPath(delimiter, path, i);
                         AssertionResult ar = matchNestedObject(delimiter, listPath, MatchType.EQUALS, actRoot, actListObject, expListObject, context);
                         if (ar.pass) { // exact match, we found it
                             found = true;
@@ -729,7 +809,7 @@ public class Script {
                 for (int i = 0; i < expCount; i++) {
                     Object expListObject = expList.get(i);
                     Object actListObject = actList.get(i);
-                    String listPath = path + "[" + i + "]";
+                    String listPath = buildListPath(delimiter, path, i);
                     AssertionResult ar = matchNestedObject(delimiter, listPath, MatchType.EQUALS, actRoot, actListObject, expListObject, context);
                     if (!ar.pass) {
                         return matchFailed(listPath, actListObject, expListObject, "[" + ar.message + "]");
@@ -739,8 +819,38 @@ public class Script {
             }
         } else if (ClassUtils.isPrimitiveOrWrapper(expObject.getClass())) {
             return matchPrimitive(path, actObject, expObject);
+        } else if (expObject instanceof BigDecimal) {
+            BigDecimal expNumber = (BigDecimal) expObject;
+            if (actObject instanceof BigDecimal) {
+                BigDecimal actNumber = (BigDecimal) actObject;
+                if (actNumber.compareTo(expNumber) != 0) {
+                    return matchFailed(path, actObject, expObject, "not equal (big decimal)");
+                }
+            } else {
+                BigDecimal actNumber = convertToBigDecimal(actObject);
+                if (actNumber == null || actNumber.compareTo(expNumber) != 0) {
+                    return matchFailed(path, actObject, expObject, "not equal (primitive : big decimal)");
+                }
+            }
+            return AssertionResult.PASS;
         } else { // this should never happen
             throw new RuntimeException("unexpected type: " + expObject.getClass());
+        }
+    }
+    
+    private static String buildListPath(char delimiter, String path, int index) {
+        int listIndex = delimiter == '/' ? index + 1 : index;
+        return path + "[" + listIndex + "]";        
+    }
+
+    private static BigDecimal convertToBigDecimal(Object o) {
+        DecimalFormat df = new DecimalFormat();
+        df.setParseBigDecimal(true);
+        try {
+            return (BigDecimal) df.parse(o.toString());
+        } catch (Exception e) {
+            logger.warn("big decimal conversion failed: {}", e.getMessage());
+            return null;
         }
     }
 
@@ -749,13 +859,23 @@ public class Script {
             return matchFailed(path, actObject, expObject, "actual value is null");
         }
         if (!expObject.getClass().equals(actObject.getClass())) {
-            // types are not the same, use the JS engine for a lenient equality check
-            String exp = actObject + " == " + expObject;
-            ScriptValue sv = evalInNashorn(exp, null);
-            if (sv.isBooleanTrue()) {
-                return AssertionResult.PASS;
+            if (actObject instanceof BigDecimal) {
+                BigDecimal actNumber = (BigDecimal) actObject;
+                BigDecimal expNumber = convertToBigDecimal(expObject);
+                if (expNumber == null || expNumber.compareTo(actNumber) != 0) {
+                    return matchFailed(path, actObject, expObject, "not equal (big decimal : primitive)");
+                } else {
+                    return AssertionResult.PASS;
+                }
             } else {
-                return matchFailed(path, actObject, expObject, "not equal");
+                // types are not the same, use the JS engine for a lenient equality check
+                String exp = actObject + " == " + expObject;
+                ScriptValue sv = evalInNashorn(exp, null);
+                if (sv.isBooleanTrue()) {
+                    return AssertionResult.PASS;
+                } else {
+                    return matchFailed(path, actObject, expObject, "not equal");
+                }
             }
         }
         if (!expObject.equals(actObject)) {
@@ -767,10 +887,11 @@ public class Script {
 
     public static void setValueByPath(String name, String path, String exp, ScriptContext context) {
         name = StringUtils.trim(name);
-        if ("request".equals(name)) {
-            throw new RuntimeException("'request' is not a variable,"
-                    + " use the form '* request <expression>' to initialize the request payload, and <expression> can be a variable");
-        }        
+        if ("request".equals(name) || "url".equals(name)) {
+            throw new RuntimeException("'" + name + "' is not a variable,"
+                    + " use the form '* " + name + " <expression>' to initialize the "
+                    + name + ", and <expression> can be a variable");
+        }
         path = StringUtils.trimToNull(path);
         if (path == null) {
             Pair<String, String> pair = parseVariableAndPath(name);
@@ -783,12 +904,12 @@ public class Script {
             switch (target.getType()) {
                 case JSON:
                     DocumentContext dc = target.getValue(DocumentContext.class);
-                    JsonUtils.setValueByPath(dc, path, value.getValue());
+                    JsonUtils.setValueByPath(dc, path, value.getAfterConvertingFromJsonOrXmlIfNeeded());
                     break;
                 case MAP:
                     Map<String, Object> map = target.getValue(Map.class);
                     DocumentContext fromMap = JsonPath.parse(map);
-                    JsonUtils.setValueByPath(fromMap, path, value.getValue());
+                    JsonUtils.setValueByPath(fromMap, path, value.getAfterConvertingFromJsonOrXmlIfNeeded());
                     context.vars.put(name, fromMap);
                     break;
                 default:

@@ -1,6 +1,7 @@
 package com.intuit.karate;
 
 import com.jayway.jsonpath.DocumentContext;
+import com.jayway.jsonpath.InvalidJsonException;
 import com.jayway.jsonpath.JsonPath;
 import java.io.File;
 import java.util.ArrayList;
@@ -47,6 +48,12 @@ public class ScriptTest {
         assertFalse(Script.isVariableAndXmlPath("foo"));
         assertTrue(Script.isJavaScriptFunction("function(){ return { bar: 'baz' } }"));
         assertFalse(Script.isVariableAndXmlPath("read('../syntax/for-demos.js')"));
+        assertTrue(Script.isXmlPath("/foo"));
+        assertTrue(Script.isXmlPath("//foo"));
+        assertTrue(Script.isXmlPathFunction("lower-case('Foo')"));
+        assertTrue(Script.isXmlPathFunction("count(/journal/article)"));
+        assertTrue(Script.isVariableAndSpaceAndPath("foo count(/journal/article)"));
+        assertTrue(Script.isVariableAndSpaceAndPath("foo $"));
     }
 
     @Test
@@ -104,6 +111,27 @@ public class ScriptTest {
         ctx.vars.put("myXml", doc);
         ScriptValue value = Script.evalInNashorn("myXml.root.foo", ctx);
         assertEquals("bar", value.getValue());
+    }
+    
+    @Test
+    public void testAssignXmlWithLineBreaksAndMatchJson() {
+        ScriptContext ctx = getContext();
+        Script.assign("foo", "<records>\n  <record>a</record>\n  <record>b</record>\n  <record>c</record>\n</records>", ctx);
+        Script.assign("bar", "foo.records", ctx);
+        ScriptValue value = ctx.vars.get("bar");
+        assertTrue(value.getType() == ScriptValue.Type.MAP);
+        assertTrue(Script.matchNamed(MatchType.EQUALS, "bar.record", null, "['a', 'b', 'c']", ctx).pass);
+        assertTrue(Script.assertBoolean("foo.records.record.length == 3", ctx).pass);
+    }
+    
+    @Test
+    public void testAssignXmlWithLineBreaksAndNullElements() {
+        ScriptContext ctx = getContext();
+        Script.assign("foo", "<records>\n  <record>a</record>\n  <record/>\n</records>", ctx);
+        Script.assign("bar", "foo.records", ctx);
+        ScriptValue value = ctx.vars.get("bar");
+        assertTrue(value.getType() == ScriptValue.Type.MAP);
+        assertTrue(Script.matchNamed(MatchType.EQUALS, "bar.record", null, "['a', null]", ctx).pass);
     }
 
     @Test
@@ -372,6 +400,17 @@ public class ScriptTest {
         assertTrue(Script.matchXmlPath(MatchType.EQUALS, response, "/foo/bar[2]", "'baz2'", ctx).pass);
         assertTrue(Script.matchXmlPath(MatchType.EQUALS, response, "/foo/bar[1]", "'baz1'", ctx).pass);
     }
+    
+    @Test
+    public void testMatchXmlAttributeErrorReporting() {
+        ScriptContext ctx = getContext();
+        Script.assign("xml", "<hello foo=\"bar\">world</hello>", ctx);
+        ScriptValue xml = ctx.vars.get("xml");
+        assertTrue(Script.matchXmlPath(MatchType.EQUALS, xml, "/", "<hello foo=\"bar\">world</hello>", ctx).pass);
+        AssertionResult ar = Script.matchXmlPath(MatchType.EQUALS, xml, "/", "<hello foo=\"baz\">world</hello>", ctx);
+        assertFalse(ar.pass);
+        assertTrue(ar.message.contains("/hello/@foo"));
+    }    
 
     @Test
     public void testAssigningAndCallingFunctionThatUpdatesVars() {
@@ -670,7 +709,7 @@ public class ScriptTest {
     } 
 
     @Test
-    public void testGetSyntax() {
+    public void testGetSyntaxForJson() {
         ScriptContext ctx = getContext();
         Script.assign("foo", "[{baz: 1}, {baz: 2}, {baz: 3}]", ctx);
         Script.assign("nums", "get foo[*].baz", ctx);
@@ -681,6 +720,15 @@ public class ScriptTest {
         Script.assign("nums", "get foo $.bar[*].baz", ctx);
         assertTrue(Script.matchNamed(MatchType.EQUALS, "nums", null, "[1, 2, 3]", ctx).pass);
     }
+    
+    @Test
+    public void testGetSyntaxForXml() {
+        ScriptContext ctx = getContext();
+        Script.assign("foo", "<records>\n  <record>a</record>\n  <record>b</record>\n  <record>c</record>\n</records>", ctx);
+        Script.assign("count", "get foo count(//record)", ctx);
+        assertTrue(Script.matchNamed(MatchType.EQUALS, "count", null, "3", ctx).pass);
+        assertTrue(Script.matchNamed(MatchType.EQUALS, "count", null, "3", ctx).pass);
+    }    
     
     @Test
     public void testFromJsKarateCallFeatureWithNoArg() {
@@ -728,6 +776,35 @@ public class ScriptTest {
         assertTrue(Script.matchNamed(MatchType.EQUALS, "ticket", null, "{ foo: 'bar' }", ctx).pass);
         Script.assign("res", "call fun", ctx);
         assertTrue(Script.matchNamed(MatchType.EQUALS, "res", null, "{ foo: 'bar_someValue', baz: 'ban' }", ctx).pass);
+    }
+    
+    @Test
+    public void testAssigningRawTextWhichOtherwiseConfusesKarate() {
+        ScriptContext ctx = getContext();
+        try {
+            Script.assign("foo", "{ not json }", ctx);
+            fail("we expected this to fail");
+        } catch (InvalidJsonException e) {
+            logger.debug("expected {}", e.getMessage());
+        }
+        Script.assignText("foo", "{ not json }", ctx);
+        assertTrue(Script.matchNamed(MatchType.EQUALS, "foo", null, "'{ not json }'", ctx).pass);
+    }
+    
+    @Test
+    public void testBigDecimalsInJson() {
+        ScriptContext ctx = getContext();
+        Script.assign("foo", "{ val: -1002.2000000000002 }", ctx);
+        assertTrue(Script.matchNamed(MatchType.EQUALS, "foo", null, "{ val: -1002.2000000000002 }", ctx).pass);
+        assertFalse(Script.matchNamed(MatchType.EQUALS, "foo", null, "{ val: -1002.2000000000001 }", ctx).pass);
+        assertFalse(Script.matchNamed(MatchType.EQUALS, "foo", null, "{ val: -1002.20 }", ctx).pass);
+        Script.assign("foo", "{ val: -1002.20 }", ctx);
+        assertFalse(Script.matchNamed(MatchType.EQUALS, "foo", null, "{ val: -1002.2000000000001 }", ctx).pass);
+        assertTrue(Script.matchNamed(MatchType.EQUALS, "foo", null, "{ val: -1002.2000000000000 }", ctx).pass);
+        Script.assign("foo", "{ val: -1002.2000000000001 }", ctx);
+        assertFalse(Script.matchNamed(MatchType.EQUALS, "foo", null, "{ val: -1002.20 }", ctx).pass);
+        Script.assign("foo", "{ val: -1002.2000000000000 }", ctx);
+        assertTrue(Script.matchNamed(MatchType.EQUALS, "foo", null, "{ val: -1002.20 }", ctx).pass);
     }
     
 

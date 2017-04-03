@@ -281,7 +281,7 @@ Then match cat.kittens contains { id: 42, name: '#string' }
 # get syntax
 * def kitnums = get cat.kittens[*].id
 * match kitnums == [23, 42]
-* def kitnames = get cat.kittens[*].name
+* def kitnames = get cat $.kittens[*].name
 * match kitnames == ['Bob', 'Wild']
 
 # read from file, text match and contains
@@ -354,3 +354,78 @@ Then match pdf == read('test.pdf')
 * def fun = function(){ return karate.get('foo.bar[*].baz') }
 * def res = fun()
 * match res == [1, 2, 3]
+
+# force type to raw text especially relevant for graph-ql
+* text foo =
+"""
+{ not json }
+"""
+* match foo == '{ not json }'
+* text bar =
+"""
+{ 
+  this is also
+  not json
+}
+"""
+* match bar contains 'not json'
+
+# yaml from file
+* def foo = read('mutation.yaml')
+* print foo
+* match foo ==
+"""
+{
+  name: null,
+  input: { 
+    id: '1',
+    subType: { name: 'name', notes: 'notes', deleted: false }    
+  },
+  output: [
+    'id',
+    { edge: [{ node: ['id', 'name', 'notes', 'deleted'] }] }
+  ]    
+}
+"""
+
+# inline yaml
+* yaml bar =
+"""
+name: John
+input:
+  id: 1
+  subType: 
+    name: 'Smith'
+    notes: 'notes'
+    deleted: false
+output:
+  - id
+  - edge:
+    - node:
+      - id
+      - name
+      - notes
+      - deleted
+"""
+* match bar ==
+"""
+{
+  name: 'John',
+  input: { 
+    id: 1,
+    subType: { name: 'Smith', notes: 'notes', deleted: false }    
+  },
+  output: [
+    'id',
+    { edge: [{ node: ['id', 'name', 'notes', 'deleted'] }] }
+  ]    
+}
+"""
+
+# big decimal
+* def nums = { profit: -1002.2000000000002 }
+* match nums == { profit: -1002.2000000000002 }
+* def nums = { profit: -1002.2000000000000 }
+* match nums == { profit: -1002.20 }
+* def nums = { profit: -1002.20 }
+* match nums == { profit: -1002.2000000000000 }
